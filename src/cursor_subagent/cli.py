@@ -8,6 +8,10 @@ import httpx
 import typer
 import websockets
 
+from cursor_subagent.env import load_env_for_cwd, load_env_files
+
+load_env_files()
+
 from cursor_subagent.bus.startup import (
     bus_status,
     gateway_ws_url,
@@ -119,9 +123,11 @@ def spawn(
     json_out: bool = typer.Option(False, "--json"),
 ) -> None:
     """Spawn a stateful sub-agent session."""
+    resolved_cwd = str(Path(cwd).resolve())
+    load_env_for_cwd(resolved_cwd)
     payload = {
         "task": task,
-        "cwd": str(Path(cwd).resolve()),
+        "cwd": resolved_cwd,
         "provider": provider,
         "model": model,
         "runtime": runtime,
@@ -149,9 +155,11 @@ def resume_cmd(
     json_out: bool = typer.Option(False, "--json"),
 ) -> None:
     """Re-register a session from an existing Cursor agent ID."""
+    resolved_cwd = str(Path(cwd).resolve())
+    load_env_for_cwd(resolved_cwd)
     payload = ResumeSessionRequest(
         agent_id=agent_id,
-        cwd=str(Path(cwd).resolve()),
+        cwd=resolved_cwd,
         provider=provider,
         model=model,
         runtime=runtime,
@@ -340,8 +348,10 @@ def wave_spawn(
     json_out: bool = typer.Option(False, "--json"),
 ) -> None:
     """Spawn one session per wave task."""
+    resolved_cwd = str(Path(cwd).resolve())
+    load_env_for_cwd(resolved_cwd)
     payload = {
-        "cwd": str(Path(cwd).resolve()),
+        "cwd": resolved_cwd,
         "task_ids": [t.strip() for t in task_ids.split(",")] if task_ids else None,
     }
     result = _request_json("POST", f"/waves/{wave_id}/spawn", json=payload)

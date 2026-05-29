@@ -38,6 +38,7 @@ def start_daemon(*, wait: bool = True, timeout: float = 10.0) -> None:
         [sys.executable, "-m", "cursor_subagent.daemon_entry"],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
+        env=os.environ.copy(),
         creationflags=getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0),
     )
     if wait:

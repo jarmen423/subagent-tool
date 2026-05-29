@@ -8,6 +8,7 @@ from cursor_sdk import Agent, AgentOptions, CloudAgentOptions, CloudRepository, 
 from cursor_sdk import CursorAgentError
 
 from cursor_subagent.providers.base import AgentProvider, ProviderSession, RunHandle, StreamEvent
+from cursor_subagent.providers.bridge_bootstrap import ensure_sdk_bridge, needs_bridge_bootstrap
 
 
 def _serialize_message(message: Any) -> dict[str, Any]:
@@ -38,6 +39,8 @@ class CursorComposerProvider:
         repo_url: str | None,
     ) -> Any:
         api_key = self._require_api_key()
+        if needs_bridge_bootstrap():
+            ensure_sdk_bridge(cwd)
         if runtime == "cloud":
             if not repo_url:
                 raise ValueError("repo_url is required for cloud runtime")
@@ -88,6 +91,8 @@ class CursorComposerProvider:
         repo_url: str | None = None,
     ) -> ProviderSession:
         api_key = self._require_api_key()
+        if needs_bridge_bootstrap():
+            ensure_sdk_bridge(cwd)
         opts = AgentOptions(api_key=api_key, model=model)
         if runtime == "cloud":
             if not repo_url:

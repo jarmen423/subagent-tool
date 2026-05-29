@@ -4,6 +4,7 @@ import os
 from dataclasses import dataclass, field
 from typing import Any
 
+from cursor_subagent.env import load_env_for_cwd
 from cursor_subagent.bus.nats_publisher import EventPublisher, NoOpPublisher
 from cursor_subagent.models import (
     EventRecord,
@@ -68,6 +69,7 @@ class SessionManager:
         for record in self.session_store.list_open_sessions():
             if record.id in self._live or not record.agent_id:
                 continue
+            load_env_for_cwd(record.cwd)
             provider = get_provider(record.provider)
             provider_session = provider.resume(
                 session_id=record.id,
@@ -80,6 +82,7 @@ class SessionManager:
             self._live[record.id] = LiveSession(record=record, provider_session=provider_session)
 
     async def resume(self, req: ResumeSessionRequest) -> dict[str, Any]:
+        load_env_for_cwd(req.cwd)
         session_id = self.session_store.new_session_id()
         provider = get_provider(req.provider)
         provider_session = provider.resume(
@@ -125,6 +128,7 @@ class SessionManager:
                 task_id=req.task_id,
             )
 
+        load_env_for_cwd(req.cwd)
         session_id = self.session_store.new_session_id()
         provider = get_provider(req.provider)
         provider_session = provider.create_session(
