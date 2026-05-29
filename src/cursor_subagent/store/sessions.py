@@ -134,6 +134,13 @@ class SessionStore:
             finished_at=row["finished_at"],
         )
 
+    def get_persisted_template(self, session_id: str) -> SessionRecord | None:
+        row = self._conn.execute(
+            "SELECT * FROM sessions WHERE id = ? AND persist = 1",
+            (session_id,),
+        ).fetchone()
+        return self._row_to_session(row) if row else None
+
     @staticmethod
     def new_session_id() -> str:
         return f"ses_{uuid.uuid4().hex[:12]}"

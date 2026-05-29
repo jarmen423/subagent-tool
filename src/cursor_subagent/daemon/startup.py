@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import signal
 import subprocess
 import sys
 import time
@@ -49,17 +50,22 @@ def start_daemon(*, wait: bool = True, timeout: float = 10.0) -> None:
 
 
 def stop_daemon() -> bool:
-    path = pidfile_path()
-    if not path.exists():
+    url = daemon_url()
+    if is_daemon_running(url):
+        try:
+            httpx.post(f"{url}/shutdown", timeout=2.0)
+            time.sleep(0.5)
+        except Exception:
+            pass
+    if is_daemon_running(url):
+        path = pidfile_path()
+        if path.exists():
+            pid = int(path.read_text().strip())
+            _kill_pid(pid)
+            path.unlink(missing_ok=True)
+            return True
         return False
-    pid = int(path.read_text().strip())
-    if sys.platform == "win32":
-        subprocess.run(["taskkill", "/PID", str(pid), "/F"], check=False, capture_output=True)
-    else:
-        import signal
-
-        os.kill(pid, signal.SIGTERM)
-    path.unlink(missing_ok=True)
+    pidfile_path().unlink(missing_ok=True)
     return True
 
 
@@ -68,3 +74,10 @@ def ensure_daemon() -> str:
     if not is_daemon_running(url):
         start_daemon()
     return url
+
+
+def _kill_pid(pid: int) -> None:
+    if sys.platform == "win32":
+        subprocess.run(["taskkill", "/PID", str(pid), "/F"], check=False, capture_output=True)
+    else:
+        os.kill(pid, signal.SIGTERM)

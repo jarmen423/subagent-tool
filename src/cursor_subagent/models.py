@@ -103,6 +103,18 @@ class SpawnSessionRequest(BaseModel):
     persist: bool = False
     wave_id: str | None = None
     task_id: str | None = None
+    from_template: str | None = None
+
+
+class ResumeSessionRequest(BaseModel):
+    agent_id: str
+    cwd: str = "."
+    provider: str = "cursor-composer"
+    model: str = "composer-2.5"
+    runtime: str = "local"
+    repo_url: str | None = None
+    persist: bool = False
+    task: str | None = None
 
 
 class SendMessageRequest(BaseModel):

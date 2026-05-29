@@ -1,94 +1,80 @@
-# Cursor Sub-Agent
+# Cursor Sub-Agent v0.2
 
-Stateful Cursor sub-agent daemon and CLI for multi-agent orchestration. v1 runs **Composer 2.5** via `cursor-sdk`; the provider layer is designed for future backends (Claude Code, KimiCode, GrokBuild, etc.).
+Stateful Cursor sub-agent orchestration with a **NATS event bus** and **Rust WebSocket gateway**.
+
+## Architecture
+
+| Component | Role |
+| --------- | ---- |
+| `cursor-subagentd` | Python REST daemon, session manager, cursor-sdk providers, SQLite |
+| `nats-server` | Pub/sub event bus for session and wave streams |
+| `subagent-gateway` | Rust WebSocket bridge (nats.rs + axum) |
+| `cursor-subagent` | CLI client for REST + gateway watch |
 
 ## Install
 
 ```bash
 cd d:\code\automations
 pip install -e ".[dev]"
+
+# NATS broker
+powershell -ExecutionPolicy Bypass -File scripts/install-nats-server.ps1
+
+# Rust gateway
+cargo build --release -p subagent-gateway
 ```
 
-Set your API key:
+Set `CURSOR_API_KEY` for live Cursor sessions.
+
+## Start stack
 
 ```bash
-export CURSOR_API_KEY="cursor_..."
+cursor-subagent bus start      # nats-server + subagent-gateway
+cursor-subagent daemon start   # Python REST daemon (auto-starts on first command)
 ```
 
-## Quick start
+## Usage
 
 ```bash
-# Start daemon (or auto-starts on first command)
-cursor-subagent daemon start
+# Spawn stateful session
+cursor-subagent spawn --task "Create hello.txt" --cwd . --json
 
-# Spawn a stateful session
-cursor-subagent spawn --task "Create hello.txt with a greeting" --cwd . --json
+# Follow-up (same session, full context)
+cursor-subagent send <sessionId> "Add a timestamp" --json
 
-# Send follow-ups (same session, full conversation context)
-cursor-subagent send ses_abc123 "Make the greeting more formal" --json
+# Live stream via Rust gateway
+cursor-subagent watch <sessionId>
 
-# Monitor live
-cursor-subagent watch ses_abc123
+# Resume from known Cursor agent ID
+cursor-subagent resume --agent-id agent-xyz --cwd . --task "Continue work" --json
 
-# Close when done
-cursor-subagent close ses_abc123 --json
+# Replay persisted automation template
+cursor-subagent spawn --from-template <oldSessionId> --task "Run again" --json
+
+# Wave orchestration
+cursor-subagent wave create --wave-id wave-1 --goal "..." --tasks tasks.json
+cursor-subagent wave spawn wave-1 --json
+cursor-subagent wave close wave-1 --json
 ```
 
-## Wave orchestration
+## Environment
 
-```bash
-cursor-subagent wave create \
-  --wave-id wave-auth \
-  --goal "Refactor auth module" \
-  --tasks tasks.json
-
-cursor-subagent wave spawn wave-auth --cwd . --json
-cursor-subagent wave status wave-auth --json
-cursor-subagent wave close wave-auth --json
-```
-
-Example `tasks.json`:
-
-```json
-{
-  "tasks": [
-    {
-      "taskId": "T1",
-      "goal": "Refactor auth middleware",
-      "ownedPaths": ["src/auth/"],
-      "handoffPath": ".planning/execution/handoffs/wave-auth/T1.md"
-    }
-  ]
-}
-```
-
-## Architecture
-
-- **`cursor-subagentd`** — long-running daemon holding in-memory SDK agent handles
-- **SQLite** — session metadata, runs, events, waves at `~/.cursor/subagents/subagents.db`
-- **CLI** — thin HTTP/WebSocket client (`127.0.0.1:17340` by default)
-
-Environment variables:
-
-| Variable | Default | Purpose |
-| -------- | ------- | ------- |
-| `CURSOR_API_KEY` | — | Required for Cursor provider |
-| `SUBAGENT_DAEMON_URL` | `http://127.0.0.1:17340` | Daemon base URL |
-| `SUBAGENT_DAEMON_PORT` | `17340` | Daemon port |
-| `SUBAGENT_DB_PATH` | `~/.cursor/subagents` | SQLite directory |
-
-## Skill
-
-Agent workflow docs live at [`.cursor/skills/cursor-subagent/SKILL.md`](.cursor/skills/cursor-subagent/SKILL.md). Copy to `~/.cursor/skills/cursor-subagent/` for global use.
+| Variable | Default |
+| -------- | ------- |
+| `CURSOR_API_KEY` | required for live Cursor |
+| `SUBAGENT_NATS_URL` | `nats://127.0.0.1:4222` |
+| `SUBAGENT_GATEWAY_URL` | `ws://127.0.0.1:17341` |
+| `SUBAGENT_DAEMON_URL` | `http://127.0.0.1:17340` |
+| `SUBAGENT_GATEWAY_BIN` | `bus/target/release/subagent-gateway(.exe)` |
+| `SUBAGENT_NATS_SERVER_BIN` | `~/.cursor/subagents/bin/nats-server(.exe)` |
 
 ## Tests
 
 ```bash
-pytest
+python -m pytest -q                 # unit tests (mocked provider)
+python -m pytest -q -m integration  # requires bus start
 ```
 
-Integration tests against live Cursor require `CURSOR_API_KEY`:
+## Skill
 
-```bash
-cursor-subagent spawn --task "Reply with the word ok" --cwd . --json
-```
+Agent workflow: [`.cursor/skills/cursor-subagent/SKILL.md`](.cursor/skills/cursor-subagent/SKILL.md)

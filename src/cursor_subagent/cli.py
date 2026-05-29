@@ -8,6 +8,12 @@ import httpx
 import typer
 import websockets
 
+from cursor_subagent.bus.startup import (
+    bus_status,
+    gateway_ws_url,
+    start_bus,
+    stop_bus,
+)
 from cursor_subagent.daemon.startup import (
     daemon_url,
     ensure_daemon,
@@ -15,13 +21,15 @@ from cursor_subagent.daemon.startup import (
     start_daemon,
     stop_daemon,
 )
-from cursor_subagent.models import CreateWaveRequest, WaveTask
+from cursor_subagent.models import CreateWaveRequest, ResumeSessionRequest, WaveTask
 from cursor_subagent.output import emit_error, emit_json
 
 app = typer.Typer(add_completion=False, no_args_is_help=True)
 daemon_app = typer.Typer(help="Manage the cursor-subagent daemon")
+bus_app = typer.Typer(help="Manage NATS + Rust gateway")
 wave_app = typer.Typer(help="Wave execution orchestration")
 app.add_typer(daemon_app, name="daemon")
+app.add_typer(bus_app, name="bus")
 app.add_typer(wave_app, name="wave")
 
 
@@ -44,16 +52,20 @@ def _request_json(method: str, path: str, **kwargs) -> dict | list:
         return resp.json()
 
 
+def _session_ws_url(session_id: str) -> str:
+    return f"{gateway_ws_url().rstrip('/')}/sessions/{session_id}/stream"
+
+
 @daemon_app.command("start")
 def daemon_start() -> None:
-    """Start the daemon process."""
+    """Start the Python REST daemon."""
     start_daemon()
     typer.echo(f"Daemon running at {daemon_url()}")
 
 
 @daemon_app.command("stop")
 def daemon_stop() -> None:
-    """Stop the daemon process."""
+    """Stop the Python REST daemon."""
     if stop_daemon():
         typer.echo("Daemon stopped")
     else:
@@ -63,12 +75,35 @@ def daemon_stop() -> None:
 @daemon_app.command("status")
 def daemon_status(json_out: bool = typer.Option(False, "--json")) -> None:
     """Check daemon health."""
-    running = is_daemon_running()
-    data = {"running": running, "url": daemon_url()}
+    data = {"running": is_daemon_running(), "url": daemon_url()}
     if json_out:
         emit_json(data)
     else:
         typer.echo(json.dumps(data))
+
+
+@bus_app.command("start")
+def bus_start() -> None:
+    """Start nats-server and subagent-gateway."""
+    start_bus()
+    typer.echo(json.dumps(bus_status(), indent=2))
+
+
+@bus_app.command("stop")
+def bus_stop() -> None:
+    """Stop nats-server and subagent-gateway."""
+    stop_bus()
+    typer.echo("Bus stopped")
+
+
+@bus_app.command("status")
+def bus_status_cmd(json_out: bool = typer.Option(False, "--json")) -> None:
+    """Check NATS and gateway health."""
+    data = bus_status()
+    if json_out:
+        emit_json(data)
+    else:
+        typer.echo(json.dumps(data, indent=2))
 
 
 @app.command("spawn")
@@ -80,6 +115,7 @@ def spawn(
     runtime: str = typer.Option("local", "--runtime"),
     repo_url: Optional[str] = typer.Option(None, "--repo"),
     persist: bool = typer.Option(False, "--persist"),
+    from_template: Optional[str] = typer.Option(None, "--from-template"),
     json_out: bool = typer.Option(False, "--json"),
 ) -> None:
     """Spawn a stateful sub-agent session."""
@@ -91,8 +127,39 @@ def spawn(
         "runtime": runtime,
         "repo_url": repo_url,
         "persist": persist,
+        "from_template": from_template,
     }
     result = _request_json("POST", "/sessions", json=payload)
+    if json_out:
+        emit_json(result)
+    else:
+        typer.echo(json.dumps(result, indent=2))
+
+
+@app.command("resume")
+def resume_cmd(
+    agent_id: str = typer.Option(..., "--agent-id"),
+    cwd: str = typer.Option(".", "--cwd"),
+    provider: str = typer.Option("cursor-composer", "--provider"),
+    model: str = typer.Option("composer-2.5", "--model"),
+    runtime: str = typer.Option("local", "--runtime"),
+    repo_url: Optional[str] = typer.Option(None, "--repo"),
+    persist: bool = typer.Option(False, "--persist"),
+    task: Optional[str] = typer.Option(None, "--task"),
+    json_out: bool = typer.Option(False, "--json"),
+) -> None:
+    """Re-register a session from an existing Cursor agent ID."""
+    payload = ResumeSessionRequest(
+        agent_id=agent_id,
+        cwd=str(Path(cwd).resolve()),
+        provider=provider,
+        model=model,
+        runtime=runtime,
+        repo_url=repo_url,
+        persist=persist,
+        task=task,
+    ).model_dump()
+    result = _request_json("POST", "/sessions/resume", json=payload)
     if json_out:
         emit_json(result)
     else:
@@ -121,23 +188,19 @@ def _watch_and_send(session_id: str, message: str, *, json_out: bool) -> None:
     import asyncio
 
     async def _run() -> dict:
-        base = ensure_daemon().replace("http://", "ws://").replace("https://", "wss://")
-        ws_url = f"{base}/sessions/{session_id}/stream"
+        ws_url = _session_ws_url(session_id)
         result: dict = {}
 
         async def _listen() -> None:
+            nonlocal result
             async with websockets.connect(ws_url) as ws:
                 while True:
                     raw = await ws.recv()
                     event = json.loads(raw)
                     if json_out:
                         print(json.dumps(event, default=str))
-                    elif event.get("event") == "stream":
-                        payload = event.get("payload", {})
-                        if payload.get("type") == "assistant":
-                            typer.echo(str(payload))
                     if event.get("event") == "run_complete":
-                        result.update(event)
+                        result = event
                         break
 
         listen_task = asyncio.create_task(_listen())
@@ -158,12 +221,11 @@ def watch_cmd(
     session_id: str = typer.Argument(...),
     json_out: bool = typer.Option(False, "--json"),
 ) -> None:
-    """Stream live session events over WebSocket."""
+    """Stream live session events from the Rust gateway over WebSocket."""
     import asyncio
 
     async def _run() -> None:
-        base = ensure_daemon().replace("http://", "ws://").replace("https://", "wss://")
-        ws_url = f"{base}/sessions/{session_id}/stream"
+        ws_url = _session_ws_url(session_id)
         async with websockets.connect(ws_url) as ws:
             while True:
                 raw = await ws.recv()

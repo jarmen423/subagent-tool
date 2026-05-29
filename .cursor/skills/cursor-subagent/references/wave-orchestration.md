@@ -27,7 +27,8 @@ Use with the **wave-execution** skill. The orchestrator (main agent) registers t
 
 ## Orchestrator flow
 
-1. Lock wave goal, task ids, dependencies, write ownership, verification commands
+1. Start stack: `cursor-subagent bus start` and `cursor-subagent daemon start`
+2. Lock wave goal, task ids, dependencies, write ownership, verification commands
 2. `cursor-subagent wave create --wave-id wave-auth-refactor --goal "..." --tasks tasks.json`
 3. `cursor-subagent wave spawn wave-auth-refactor --cwd . --json`
 4. Monitor: `cursor-subagent wave status wave-auth-refactor --json`

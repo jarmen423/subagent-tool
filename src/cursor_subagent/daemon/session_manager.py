@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-import asyncio
-import json
-from collections import defaultdict
+import os
 from dataclasses import dataclass, field
 from typing import Any
 
+from cursor_subagent.bus.nats_publisher import EventPublisher, NoOpPublisher
 from cursor_subagent.models import (
     EventRecord,
     RunRecord,
@@ -13,12 +12,18 @@ from cursor_subagent.models import (
     SessionRecord,
     SessionStatus,
     SpawnSessionRequest,
+    ResumeSessionRequest,
     utc_now_iso,
 )
 from cursor_subagent.providers import get_provider
 from cursor_subagent.providers.base import ProviderSession, RunHandle
 from cursor_subagent.store.events import EventStore
 from cursor_subagent.store.sessions import SessionStore
+
+
+def _gateway_stream_path(session_id: str) -> str:
+    base = os.environ.get("SUBAGENT_GATEWAY_URL", "ws://127.0.0.1:17341")
+    return f"{base.rstrip('/')}/sessions/{session_id}/stream"
 
 
 @dataclass
@@ -32,10 +37,8 @@ class LiveSession:
 class SessionManager:
     session_store: SessionStore
     event_store: EventStore
+    publisher: EventPublisher = field(default_factory=NoOpPublisher)
     _live: dict[str, LiveSession] = field(default_factory=dict)
-    _subscribers: dict[str, list[asyncio.Queue[dict[str, Any]]]] = field(
-        default_factory=lambda: defaultdict(list)
-    )
 
     def _to_response(self, record: SessionRecord, run: RunRecord | None = None) -> dict[str, Any]:
         return {
@@ -49,22 +52,17 @@ class SessionManager:
             "provider": record.provider,
             "wave_id": record.wave_id,
             "task_id": record.task_id,
-            "stream_url": f"/sessions/{record.id}/stream",
+            "stream_url": _gateway_stream_path(record.id),
         }
 
-    async def subscribe(self, session_id: str) -> asyncio.Queue[dict[str, Any]]:
-        queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
-        self._subscribers[session_id].append(queue)
-        return queue
-
-    def unsubscribe(self, session_id: str, queue: asyncio.Queue[dict[str, Any]]) -> None:
-        subs = self._subscribers.get(session_id, [])
-        if queue in subs:
-            subs.remove(queue)
-
-    async def _broadcast(self, session_id: str, event: dict[str, Any]) -> None:
-        for queue in list(self._subscribers.get(session_id, [])):
-            await queue.put(event)
+    async def _emit(self, session_id: str, event: dict[str, Any]) -> None:
+        await self.publisher.publish_session_event(session_id, event)
+        record = self.session_store.get_session(session_id)
+        if record and record.wave_id:
+            await self.publisher.publish_wave_event(
+                record.wave_id,
+                {"session_id": session_id, **event},
+            )
 
     async def recover_open_sessions(self) -> None:
         for record in self.session_store.list_open_sessions():
@@ -81,7 +79,52 @@ class SessionManager:
             )
             self._live[record.id] = LiveSession(record=record, provider_session=provider_session)
 
+    async def resume(self, req: ResumeSessionRequest) -> dict[str, Any]:
+        session_id = self.session_store.new_session_id()
+        provider = get_provider(req.provider)
+        provider_session = provider.resume(
+            session_id=session_id,
+            agent_id=req.agent_id,
+            cwd=req.cwd,
+            model=req.model,
+            runtime=req.runtime,
+            repo_url=req.repo_url,
+        )
+        record = SessionRecord(
+            id=session_id,
+            provider=req.provider,
+            agent_id=req.agent_id,
+            cwd=req.cwd,
+            model=req.model,
+            runtime=req.runtime,
+            status=SessionStatus.IDLE,
+            task_summary=req.task,
+            persist=req.persist,
+            repo_url=req.repo_url,
+        )
+        self.session_store.create_session(record)
+        self._live[session_id] = LiveSession(record=record, provider_session=provider_session)
+        if req.task:
+            return await self.send_message(session_id, req.task)
+        return self._to_response(record)
+
     async def spawn(self, req: SpawnSessionRequest) -> dict[str, Any]:
+        if req.from_template:
+            template = self.session_store.get_persisted_template(req.from_template)
+            if template is None:
+                raise ValueError(f"Persisted template not found: {req.from_template}")
+            req = SpawnSessionRequest(
+                task=req.task or template.task_summary or "Continue the automation task",
+                cwd=req.cwd or template.cwd,
+                provider=req.provider or template.provider,
+                model=req.model or template.model,
+                runtime=req.runtime or template.runtime,
+                repo_url=req.repo_url or template.repo_url,
+                persist=req.persist,
+                wave_id=req.wave_id,
+                task_id=req.task_id,
+            )
+
         session_id = self.session_store.new_session_id()
         provider = get_provider(req.provider)
         provider_session = provider.create_session(
@@ -110,6 +153,8 @@ class SessionManager:
         return await self.send_message(session_id, req.task)
 
     async def send_message(self, session_id: str, message: str) -> dict[str, Any]:
+        import asyncio
+
         live = self._get_live(session_id)
         provider = get_provider(live.record.provider)
         live.record.status = SessionStatus.RUNNING
@@ -121,8 +166,10 @@ class SessionManager:
         self.session_store.create_run(run)
 
         loop = asyncio.get_running_loop()
+        pending_events: list[dict[str, Any]] = []
 
-        def _stream_and_wait() -> tuple[str, str]:
+        def _stream_and_wait() -> tuple[str, str, list[dict[str, Any]]]:
+            events: list[dict[str, Any]] = []
             for event in provider.stream(handle):
                 payload = {"type": event.type, "payload": event.payload}
                 self.event_store.append(
@@ -133,17 +180,13 @@ class SessionManager:
                         payload=event.payload,
                     )
                 )
-                asyncio.run_coroutine_threadsafe(
-                    self._broadcast(
-                        session_id,
-                        {"event": "stream", "run_id": handle.run_id, **payload},
-                    ),
-                    loop,
-                )
+                events.append({"event": "stream", "run_id": handle.run_id, **payload})
             status, result = provider.wait(handle)
-            return status, result
+            return status, result, events
 
-        status, result = await loop.run_in_executor(None, _stream_and_wait)
+        status, result, pending_events = await loop.run_in_executor(None, _stream_and_wait)
+        for event in pending_events:
+            await self._emit(session_id, event)
 
         run_status = RunStatus.FINISHED if status == "finished" else RunStatus.ERROR
         if status == "cancelled":
@@ -156,7 +199,7 @@ class SessionManager:
         live.active_run = None
 
         latest = self.session_store.get_latest_run(session_id)
-        await self._broadcast(
+        await self._emit(
             session_id,
             {
                 "event": "run_complete",
@@ -185,7 +228,7 @@ class SessionManager:
             provider.close(live.provider_session)
         purge = not record.persist and not record.wave_id
         self.session_store.close_session(session_id, purge=purge)
-        await self._broadcast(session_id, {"event": "session_closed", "session_id": session_id})
+        await self._emit(session_id, {"event": "session_closed", "session_id": session_id})
         return {"session_id": session_id, "status": "closed", "purged": purge}
 
     def get_session(self, session_id: str) -> dict[str, Any]:

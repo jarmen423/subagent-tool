@@ -51,6 +51,7 @@ def client(monkeypatch: pytest.MonkeyPatch, tmp_path):
     fake = FakeProvider()
     monkeypatch.setattr("cursor_subagent.daemon.session_manager.get_provider", lambda _id: fake)
     monkeypatch.setenv("SUBAGENT_DB_PATH", str(tmp_path))
+    monkeypatch.setenv("SUBAGENT_DISABLE_NATS", "1")
     app = create_app()
     with TestClient(app) as test_client:
         yield test_client
