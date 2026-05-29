@@ -5,7 +5,7 @@ Stateful Cursor sub-agent orchestration with a **NATS event bus** and **Rust Web
 ## Architecture
 
 | Component | Role |
-| --------- | ---- |
+| -------- | ---- |
 | `cursor-subagentd` | Python REST daemon, session manager, cursor-sdk providers, SQLite |
 | `nats-server` | Pub/sub event bus for session and wave streams |
 | `subagent-gateway` | Rust WebSocket bridge (nats.rs + axum) |
@@ -24,7 +24,25 @@ powershell -ExecutionPolicy Bypass -File scripts/install-nats-server.ps1
 cargo build --release -p subagent-gateway
 ```
 
-Set `CURSOR_API_KEY` for live Cursor sessions.
+## Credentials (`CURSOR_API_KEY`)
+
+Mint a key at [cursor.com/dashboard/cloud-agents](https://cursor.com/dashboard/cloud-agents).
+
+The tool resolves credentials at **spawn time** from the repo you pass via `--cwd`:
+
+| Priority | Source | Use case |
+| -------- | ------ | -------- |
+| 1 | `CURSOR_API_KEY` already in the environment | CI, shell profile |
+| 2 | Repo `.env` (walks up from `--cwd` to `.git` root) | Per-project automation |
+| 3 | `~/.cursor/subagents/.env` | Machine-wide default |
+
+Example repo `.env` (gitignored):
+
+```bash
+CURSOR_API_KEY=cursor_...
+```
+
+**Agents:** always pass `--cwd` to the target repository. Never log or commit `.env`.
 
 ## Start stack
 
@@ -36,7 +54,7 @@ cursor-subagent daemon start   # Python REST daemon (auto-starts on first comman
 ## Usage
 
 ```bash
-# Spawn stateful session
+# Spawn stateful session (loads .env from --cwd)
 cursor-subagent spawn --task "Create hello.txt" --cwd . --json
 
 # Follow-up (same session, full context)
@@ -53,20 +71,40 @@ cursor-subagent spawn --from-template <oldSessionId> --task "Run again" --json
 
 # Wave orchestration
 cursor-subagent wave create --wave-id wave-1 --goal "..." --tasks tasks.json
-cursor-subagent wave spawn wave-1 --json
+cursor-subagent wave spawn wave-1 --cwd . --json
 cursor-subagent wave close wave-1 --json
 ```
+
+## Smoke test
+
+With `CURSOR_API_KEY` configured and the stack running:
+
+```bash
+cursor-subagent spawn \
+  --task "Create scripts/hello_subagent.py with a main() that prints Hello from subagent" \
+  --cwd . --json
+python scripts/hello_subagent.py
+cursor-subagent close <sessionId> --json
+```
+
+## Windows note
+
+Local runtime uses the `cursor-sdk` bridge. On Windows, the daemon pre-launches the bridge (workaround for `WinError 10038` when the SDK uses `select()` on pipe handles). No manual setup required.
+
+Optional: if you already run a bridge, set `CURSOR_SDK_BRIDGE_URL` and `CURSOR_SDK_BRIDGE_TOKEN` before spawning.
 
 ## Environment
 
 | Variable | Default |
 | -------- | ------- |
-| `CURSOR_API_KEY` | required for live Cursor |
+| `CURSOR_API_KEY` | required for live Cursor (see credentials above) |
 | `SUBAGENT_NATS_URL` | `nats://127.0.0.1:4222` |
 | `SUBAGENT_GATEWAY_URL` | `ws://127.0.0.1:17341` |
 | `SUBAGENT_DAEMON_URL` | `http://127.0.0.1:17340` |
 | `SUBAGENT_GATEWAY_BIN` | `bus/target/release/subagent-gateway(.exe)` |
 | `SUBAGENT_NATS_SERVER_BIN` | `~/.cursor/subagents/bin/nats-server(.exe)` |
+| `CURSOR_SDK_BRIDGE_URL` | auto on Windows; optional manual bridge |
+| `CURSOR_SDK_BRIDGE_TOKEN` | paired with bridge URL |
 
 ## Tests
 

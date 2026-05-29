@@ -9,6 +9,18 @@ cursor-subagent bus status --json
 cursor-subagent daemon status --json
 ```
 
+## Credentials
+
+Loaded at spawn/resume time from `--cwd`:
+
+| Priority | Source |
+| -------- | ------ |
+| 1 | `CURSOR_API_KEY` in process environment |
+| 2 | `<repo>/.env` (walk up from `--cwd` to `.git` root) |
+| 3 | `~/.cursor/subagents/.env` |
+
+Agents must pass `--cwd` to the repository under automation.
+
 ## Session commands
 
 | Command | Description |
@@ -36,7 +48,7 @@ cursor-subagent daemon status --json
 | Command | Description |
 | ------- | ----------- |
 | `wave create --wave-id ID --goal TEXT --tasks FILE [--json]` | Register wave |
-| `wave spawn <waveId> [--task-ids T1,T2] [--json]` | Spawn parallel sessions |
+| `wave spawn <waveId> [--task-ids T1,T2] [--cwd .] [--json]` | Spawn parallel sessions |
 | `wave status <waveId> [--json]` | Wave + sessions |
 | `wave close <waveId> [--json]` | Close all wave sessions |
 
@@ -55,7 +67,7 @@ cursor-subagent daemon status --json
 | `ws://127.0.0.1:17341/sessions/{sessionId}/stream` | Session events |
 | `ws://127.0.0.1:17341/waves/{waveId}/stream` | Wave events |
 
-## Python REST API (unchanged)
+## Python REST API
 
 | Method | Path |
 | ------ | ---- |
@@ -66,3 +78,9 @@ cursor-subagent daemon status --json
 | POST/GET | `/waves`, `/waves/{id}`, `/waves/{id}/spawn`, `/waves/{id}/close` |
 
 Streaming moved off FastAPI WebSocket — use gateway instead.
+
+## Windows / cursor-sdk bridge
+
+Local runtime requires the `cursor-sdk` bridge. On Windows the provider pre-launches the bridge and sets `CURSOR_SDK_BRIDGE_URL` / `CURSOR_SDK_BRIDGE_TOKEN` (workaround for SDK `WinError 10038`).
+
+To attach to an existing bridge manually, export those variables before spawning.

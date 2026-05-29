@@ -26,12 +26,26 @@ Load [`references/daemon-and-cli-reference.md`](references/daemon-and-cli-refere
 1. Install Python package: `pip install -e .`
 2. Install NATS: `scripts/install-nats-server.ps1` (Windows) or `.sh` (Unix)
 3. Build gateway: `cargo build --release -p subagent-gateway`
-4. Export `CURSOR_API_KEY`
+4. Configure `CURSOR_API_KEY` (see **Credentials** below)
 5. Start stack:
    ```bash
    cursor-subagent bus start
    cursor-subagent daemon start
    ```
+
+## Credentials
+
+Resolve `CURSOR_API_KEY` before spawning. Priority (first match wins):
+
+1. Environment variable already set
+2. Repo `.env` — walks up from `--cwd` to the `.git` root
+3. `~/.cursor/subagents/.env` — machine default
+
+**Agent rules:**
+
+- Always pass `--cwd` to the **target repository** being automated
+- Prefer repo `.env` for project-specific keys; never read, log, or commit it
+- Mint keys at https://cursor.com/dashboard/cloud-agents
 
 ## When to delegate
 
@@ -44,7 +58,7 @@ Do **not** spawn a new session per message.
 ## Core workflow
 
 ```bash
-cursor-subagent spawn --task "<precise task with owned paths>" --cwd . --json
+cursor-subagent spawn --task "<precise task with owned paths>" --cwd /path/to/repo --json
 cursor-subagent send <sessionId> "<feedback>" --json
 cursor-subagent watch <sessionId>              # Rust gateway WebSocket
 cursor-subagent close <sessionId> --json
@@ -77,5 +91,6 @@ cursor-subagent wave close wave-1 --json
 - Always `close` sessions or `wave close` when finished
 - Never log `CURSOR_API_KEY`
 - v1 provider: `cursor-composer` only
+- On Windows, local runtime bridge bootstrap is automatic
 
 See [`references/agent-md-snippet.md`](references/agent-md-snippet.md) for AGENTS.md copy-paste block.
