@@ -16,6 +16,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 
+from cursor_subagent.bus.nats_publisher import create_publisher
 from cursor_subagent.daemon.session_manager import SessionManager
 from cursor_subagent.daemon.startup import DEFAULT_HOST, DEFAULT_PORT, pidfile_path
 from cursor_subagent.models import (
@@ -44,9 +45,13 @@ def create_app() -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         pidfile_path().write_text(str(os.getpid()))
+        manager.publisher = await create_publisher()
         await manager.recover_open_sessions()
-        yield
-        pidfile_path().unlink(missing_ok=True)
+        try:
+            yield
+        finally:
+            await manager.publisher.close()
+            pidfile_path().unlink(missing_ok=True)
 
     app = FastAPI(title="cursor-subagentd", lifespan=lifespan)
 

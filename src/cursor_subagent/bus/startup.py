@@ -104,6 +104,8 @@ def start_nats_server(*, wait: bool = True, timeout: float = 10.0) -> None:
         [str(binary), "-p", str(DEFAULT_NATS_PORT), "-l", str(log_path)],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
+        # Keep the broker alive after the short-lived CLI process exits.
+        start_new_session=sys.platform != "win32",
         creationflags=getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0),
     )
     nats_pidfile().write_text(str(proc.pid))
@@ -143,6 +145,8 @@ def start_gateway(*, wait: bool = True, timeout: float = 10.0) -> None:
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         env=env,
+        # Keep the gateway alive after the short-lived CLI process exits.
+        start_new_session=sys.platform != "win32",
         creationflags=getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0),
     )
     gateway_pidfile().write_text(str(proc.pid))

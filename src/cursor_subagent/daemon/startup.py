@@ -39,6 +39,8 @@ def start_daemon(*, wait: bool = True, timeout: float = 10.0) -> None:
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         env=os.environ.copy(),
+        # Keep the REST daemon alive after the short-lived CLI process exits.
+        start_new_session=sys.platform != "win32",
         creationflags=getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0),
     )
     if wait:

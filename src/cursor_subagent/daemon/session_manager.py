@@ -57,6 +57,13 @@ class SessionManager:
         }
 
     async def _emit(self, session_id: str, event: dict[str, Any]) -> None:
+        """Publish an already-persisted event to live session and wave streams.
+
+        The SQLite event store is the replay source for ``cursor-subagent
+        events``. NATS is only the live transport for ``watch``, so callers
+        persist durable events before handing them to this method.
+        """
+
         await self.publisher.publish_session_event(session_id, event)
         record = self.session_store.get_session(session_id)
         if record and record.wave_id:
@@ -203,15 +210,21 @@ class SessionManager:
         live.active_run = None
 
         latest = self.session_store.get_latest_run(session_id)
-        await self._emit(
-            session_id,
-            {
-                "event": "run_complete",
-                "run_id": handle.run_id,
-                "status": run_status.value,
-                "result": result,
-            },
+        completion_event = {
+            "event": "run_complete",
+            "run_id": handle.run_id,
+            "status": run_status.value,
+            "result": result,
+        }
+        self.event_store.append(
+            EventRecord(
+                session_id=session_id,
+                run_id=handle.run_id,
+                type="run_complete",
+                payload=completion_event,
+            )
         )
+        await self._emit(session_id, completion_event)
         return self._to_response(live.record, latest)
 
     async def cancel(self, session_id: str) -> dict[str, Any]:
@@ -231,8 +244,18 @@ class SessionManager:
             provider = get_provider(live.record.provider)
             provider.close(live.provider_session)
         purge = not record.persist and not record.wave_id
+        latest = self.session_store.get_latest_run(session_id)
+        close_event = {"event": "session_closed", "session_id": session_id}
+        self.event_store.append(
+            EventRecord(
+                session_id=session_id,
+                run_id=latest.id if latest else "",
+                type="session_closed",
+                payload=close_event,
+            )
+        )
         self.session_store.close_session(session_id, purge=purge)
-        await self._emit(session_id, {"event": "session_closed", "session_id": session_id})
+        await self._emit(session_id, close_event)
         return {"session_id": session_id, "status": "closed", "purged": purge}
 
     def get_session(self, session_id: str) -> dict[str, Any]:

@@ -14,13 +14,21 @@ Stateful Cursor sub-agent orchestration with a **NATS event bus** and **Rust Web
 ## Install
 
 ```bash
-cd d:\code\automations
+cd /data/code/subagent-tool
 pip install -e ".[dev]"
+```
 
-# NATS broker
+Linux/macOS:
+
+```bash
+bash scripts/install-nats-server.sh
+cargo build --release -p subagent-gateway --manifest-path bus/Cargo.toml
+```
+
+Windows:
+
+```powershell
 powershell -ExecutionPolicy Bypass -File scripts/install-nats-server.ps1
-
-# Rust gateway
 cargo build --release -p subagent-gateway
 ```
 
@@ -49,6 +57,16 @@ CURSOR_API_KEY=cursor_...
 ```bash
 cursor-subagent bus start      # nats-server + subagent-gateway
 cursor-subagent daemon start   # Python REST daemon (auto-starts on first command)
+cursor-subagent bus status --json
+cursor-subagent daemon status --json
+```
+
+On Linux, `bus start` and `daemon start` detach their child processes so they
+remain available after the short-lived CLI command exits. Restart the daemon
+after changing Python code so it picks up local source edits:
+
+```bash
+cursor-subagent daemon stop && cursor-subagent daemon start
 ```
 
 ## Usage
@@ -60,8 +78,14 @@ cursor-subagent spawn --task "Create hello.txt" --cwd . --json
 # Follow-up (same session, full context)
 cursor-subagent send <sessionId> "Add a timestamp" --json
 
-# Live stream via Rust gateway
+# Follow-up and stream the same run via the Rust gateway
+cursor-subagent send <sessionId> "Add another timestamp" --watch --json
+
+# Watch events from another shell
 cursor-subagent watch <sessionId>
+
+# Replay stored events from SQLite
+cursor-subagent events <sessionId> --json
 
 # Resume from known Cursor agent ID
 cursor-subagent resume --agent-id agent-xyz --cwd . --task "Continue work" --json
@@ -93,6 +117,25 @@ Local runtime uses the `cursor-sdk` bridge. On Windows, the daemon pre-launches 
 
 Optional: if you already run a bridge, set `CURSOR_SDK_BRIDGE_URL` and `CURSOR_SDK_BRIDGE_TOKEN` before spawning.
 
+## Linux notes
+
+- The Unix NATS installer places `nats-server` at
+  `~/.cursor/subagents/bin/nats-server`.
+- The Rust gateway binary is discovered at `bus/target/release/subagent-gateway`
+  unless `SUBAGENT_GATEWAY_BIN` is set.
+- Repo-local `.env` files are loaded from each command's `--cwd`. This also
+  matters during daemon recovery: always pass an absolute `--cwd` on spawn,
+  resume, and wave commands so recovered sessions can find `CURSOR_API_KEY`.
+- The daemon must start while the bus is running if `watch` should receive live
+  events. If it started while NATS was down, run
+  `cursor-subagent daemon stop && cursor-subagent daemon start`.
+- SQLite state lives in `~/.cursor/subagents/subagents.db`. Non-persisted
+  sessions are purged on close; use `--persist` when you need templates or
+  durable event replay.
+- Keep some free space on the root filesystem. SQLite WAL mode and local Python
+  environments fail when `/` is full. If root is tight, set `UV_CACHE_DIR` to a
+  path on `/data` before running `uv run`.
+
 ## Environment
 
 | Variable | Default |
@@ -109,8 +152,9 @@ Optional: if you already run a bridge, set `CURSOR_SDK_BRIDGE_URL` and `CURSOR_S
 ## Tests
 
 ```bash
-python -m pytest -q                 # unit tests (mocked provider)
-python -m pytest -q -m integration  # requires bus start
+python -m pytest -q                         # installed dev environment
+UV_CACHE_DIR=.uv-cache uv run --extra dev pytest -q
+python -m pytest -q -m integration          # requires bus start
 ```
 
 ## Skill

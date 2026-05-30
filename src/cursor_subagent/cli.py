@@ -198,10 +198,12 @@ def _watch_and_send(session_id: str, message: str, *, json_out: bool) -> None:
     async def _run() -> dict:
         ws_url = _session_ws_url(session_id)
         result: dict = {}
+        connected = asyncio.Event()
 
         async def _listen() -> None:
             nonlocal result
             async with websockets.connect(ws_url) as ws:
+                connected.set()
                 while True:
                     raw = await ws.recv()
                     event = json.loads(raw)
@@ -212,11 +214,21 @@ def _watch_and_send(session_id: str, message: str, *, json_out: bool) -> None:
                         break
 
         listen_task = asyncio.create_task(_listen())
-        with httpx.Client(base_url=ensure_daemon(), timeout=600.0) as client:
-            resp = client.post(f"/sessions/{session_id}/messages", json={"message": message})
-            resp.raise_for_status()
-            result = resp.json()
-        await listen_task
+        try:
+            # The gateway must be subscribed before the REST call starts;
+            # otherwise fast runs can publish run_complete before watch is live.
+            await asyncio.wait_for(connected.wait(), timeout=10.0)
+            async with httpx.AsyncClient(base_url=ensure_daemon(), timeout=600.0) as client:
+                resp = await client.post(
+                    f"/sessions/{session_id}/messages",
+                    json={"message": message},
+                )
+                resp.raise_for_status()
+                result = resp.json()
+            await listen_task
+        except Exception:
+            listen_task.cancel()
+            raise
         return result
 
     final = asyncio.run(_run())

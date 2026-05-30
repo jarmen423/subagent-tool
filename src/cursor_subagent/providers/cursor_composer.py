@@ -26,9 +26,47 @@ class CursorComposerProvider:
         self._api_key = api_key or os.environ.get("CURSOR_API_KEY")
 
     def _require_api_key(self) -> str:
+        """Return the current Cursor API key after per-command env loading.
+
+        The daemon can recover sessions for repositories whose credentials live
+        in repo-local ``.env`` files. Those env files are loaded after the
+        provider registry is imported, so this method must re-check
+        ``os.environ`` instead of only trusting the constructor snapshot.
+        """
+
+        self._api_key = self._api_key or os.environ.get("CURSOR_API_KEY")
         if not self._api_key:
             raise CursorAgentError("CURSOR_API_KEY is not set")
         return self._api_key
+
+    def _agent_options(
+        self,
+        *,
+        api_key: str,
+        cwd: str,
+        model: str,
+        runtime: str,
+        repo_url: str | None,
+    ) -> AgentOptions:
+        """Build immutable cursor-sdk options for a local or cloud agent.
+
+        ``cursor-sdk`` models its option objects as frozen dataclasses, so all
+        runtime-specific options must be passed into the constructor. Mutating a
+        partially constructed ``AgentOptions`` breaks daemon recovery.
+        """
+
+        if runtime == "cloud":
+            if not repo_url:
+                raise ValueError("repo_url is required for cloud runtime")
+            return AgentOptions(
+                api_key=api_key,
+                model=model,
+                cloud=CloudAgentOptions(
+                    repos=[CloudRepository(url=repo_url)],
+                    skip_reviewer_request=True,
+                ),
+            )
+        return AgentOptions(api_key=api_key, model=model, local=LocalAgentOptions(cwd=cwd))
 
     def _create_agent(
         self,
@@ -41,21 +79,14 @@ class CursorComposerProvider:
         api_key = self._require_api_key()
         if needs_bridge_bootstrap():
             ensure_sdk_bridge(cwd)
-        if runtime == "cloud":
-            if not repo_url:
-                raise ValueError("repo_url is required for cloud runtime")
-            return Agent.create(
-                model=model,
-                api_key=api_key,
-                cloud=CloudAgentOptions(
-                    repos=[CloudRepository(url=repo_url)],
-                    skip_reviewer_request=True,
-                ),
-            )
         return Agent.create(
-            model=model,
-            api_key=api_key,
-            local=LocalAgentOptions(cwd=cwd),
+            self._agent_options(
+                api_key=api_key,
+                cwd=cwd,
+                model=model,
+                runtime=runtime,
+                repo_url=repo_url,
+            )
         )
 
     def create_session(
@@ -93,16 +124,13 @@ class CursorComposerProvider:
         api_key = self._require_api_key()
         if needs_bridge_bootstrap():
             ensure_sdk_bridge(cwd)
-        opts = AgentOptions(api_key=api_key, model=model)
-        if runtime == "cloud":
-            if not repo_url:
-                raise ValueError("repo_url is required for cloud runtime")
-            opts.cloud = CloudAgentOptions(
-                repos=[CloudRepository(url=repo_url)],
-                skip_reviewer_request=True,
-            )
-        else:
-            opts.local = LocalAgentOptions(cwd=cwd)
+        opts = self._agent_options(
+            api_key=api_key,
+            cwd=cwd,
+            model=model,
+            runtime=runtime,
+            repo_url=repo_url,
+        )
         agent_cm = Agent.resume(agent_id, opts)
         agent = agent_cm.__enter__()
         return ProviderSession(
