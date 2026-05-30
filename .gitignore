@@ -16,3 +16,4 @@ bus/target/
 .env
 .bridge-stderr.txt
 .subagent-spawn-output.json
+.worktrees/
