@@ -45,6 +45,18 @@ Agents: never log the key. Confirm `.env` exists without printing it (`Test-Path
 
 ---
 
+## Cloud agents
+
+| Symptom | Cause | Fix |
+| ------- | ----- | --- |
+| `repo_url is required for cloud runtime` | `--runtime cloud` without `--repo` | Pass `--repo https://github.com/org/repo` |
+| Agent starts but no repo access | GitHub/GitLab not connected or read-only | Connect account in Cursor; grant read-write on target repo |
+| Wrong agent on resume | Mixed local/cloud flags | Cloud IDs are `bc-*`; pass `--runtime cloud --repo` on resume |
+| Expected cloud but got local edits | Omitted `--runtime cloud` | Re-spawn with `--runtime cloud --repo` |
+| `wave spawn` not using cloud | Wave path has no runtime/repo passthrough | Use individual `spawn --runtime cloud` per task |
+
+---
+
 ## Sessions
 
 | Symptom | Cause | Fix |

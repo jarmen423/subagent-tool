@@ -84,8 +84,47 @@ The SDK skips auto-launch when both are set.
 | | `--runtime local` (default) | `--runtime cloud --repo URL` |
 | --- | --- | --- |
 | Where agent runs | Your machine | Cursor cloud VM |
-| Files | Live `--cwd` checkout | Cloned repo |
-| Bridge | Required (Python SDK) | SDK still uses default client/bridge pattern |
-| Use when | Dev automation, uncommitted work | Long jobs, PR-based workflows |
+| Files | Live `--cwd` checkout | Cloned from `--repo` (GitHub/GitLab) |
+| Agent ID prefix | `agent-<uuid>` | `bc-<uuid>` |
+| Bridge | Required (Python SDK) | Not used for the agent loop; cloud runs in Cursor's VM |
+| Use when | Dev automation, uncommitted work | Long jobs, PR workflows, parallel remote work |
 
 v1 default and best-tested path: **local** with `--cwd`.
+
+### Cloud spawn example
+
+```bash
+cursor-subagent spawn \
+  --task "Fix auth middleware and add regression tests" \
+  --runtime cloud \
+  --repo https://github.com/your-org/your-repo \
+  --cwd /path/to/repo \
+  --json
+```
+
+### Cloud prerequisites
+
+- `CURSOR_API_KEY` resolved the same way as local (env → repo `.env` → `~/.cursor/subagents/.env`)
+- Paid Cursor plan
+- GitHub or GitLab account connected in Cursor with **read-write** access to the `--repo` URL
+- `--repo` is mandatory; omitting it raises `repo_url is required for cloud runtime`
+
+### Cloud resume
+
+Pass the same `--runtime cloud --repo` flags when re-attaching to an existing cloud agent:
+
+```bash
+cursor-subagent resume \
+  --agent-id bc-<uuid> \
+  --runtime cloud \
+  --repo https://github.com/your-org/your-repo \
+  --cwd /path/to/repo \
+  --task "Continue" \
+  --json
+```
+
+`runtime` and `repo_url` are stored in SQLite so daemon recovery can rehydrate cloud sessions after restart.
+
+### Wave orchestration gap
+
+`wave spawn` does not accept `--runtime` or `--repo`. Wave tasks always create **local** sessions. For cloud parallel work, spawn separate sessions with `spawn --runtime cloud --repo ...` instead of `wave spawn`.
