@@ -86,6 +86,40 @@ Expected behavior:
 - `close` returns `"purged": false` for persisted sessions and `"purged": true`
   for normal sessions.
 
+## Local automation check
+
+Automations are daemon-local cron/webhook definitions stored in SQLite. They
+create a fresh persisted Cursor session per trigger, but each run receives the
+automation's rolling memory summary and recent run history in the prompt.
+
+```shell
+cursor-subagent automation create \
+  --name "Manual smoke automation" \
+  --task "Reply with an Automation Memory Update saying the smoke ran" \
+  --cwd "$(pwd)" \
+  --webhook \
+  --json
+
+cursor-subagent automation trigger <automationId> \
+  --payload '{"reason":"smoke"}' \
+  --json
+
+cursor-subagent automation history <automationId> --full --json
+```
+
+For webhooks, use the generated URL and one-time secret from `automation create`
+or `automation rotate-secret`:
+
+```shell
+curl -X POST "$WEBHOOK_URL" \
+  -H "Authorization: Bearer $WEBHOOK_SECRET" \
+  -H "Content-Type: application/json" \
+  -d '{"payload":{"source":"curl"}}'
+```
+
+Cron schedules use standard five-field cron in the daemon's local timezone.
+The scheduler does not backfill runs missed while the daemon was stopped.
+
 ## Agent delegation pattern
 
 Main agents should:
@@ -113,3 +147,5 @@ session for each follow-up.
 | `watch` shows no events | Run `cursor-subagent bus start`, then restart the daemon so it binds a NATS publisher |
 | `send --watch` hangs | Update to the version where the CLI connects WebSocket before starting the REST send |
 | Daemon stale after code change | `cursor-subagent daemon stop && cursor-subagent daemon start` |
+| Automation cron does not fire | Verify daemon is running, automation status is `enabled`, `next_run_at` is due, and `SUBAGENT_DISABLE_AUTOMATION_SCHEDULER` is not `1` |
+| Webhook returns 401 | Use `Authorization: Bearer <secret>` from create/rotate-secret; only the hash is stored, so rotate if the secret was lost |

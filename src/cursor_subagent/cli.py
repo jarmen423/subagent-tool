@@ -25,16 +25,24 @@ from cursor_subagent.daemon.startup import (
     start_daemon,
     stop_daemon,
 )
-from cursor_subagent.models import CreateWaveRequest, ResumeSessionRequest, WaveTask
+from cursor_subagent.models import (
+    CreateAutomationRequest,
+    CreateWaveRequest,
+    ResumeSessionRequest,
+    UpdateAutomationRequest,
+    WaveTask,
+)
 from cursor_subagent.output import emit_error, emit_json
 
 app = typer.Typer(add_completion=False, no_args_is_help=True)
 daemon_app = typer.Typer(help="Manage the cursor-subagent daemon")
 bus_app = typer.Typer(help="Manage NATS + Rust gateway")
 wave_app = typer.Typer(help="Wave execution orchestration")
+automation_app = typer.Typer(help="Manage project-local automations")
 app.add_typer(daemon_app, name="daemon")
 app.add_typer(bus_app, name="bus")
 app.add_typer(wave_app, name="wave")
+app.add_typer(automation_app, name="automation")
 
 
 def _client() -> httpx.Client:
@@ -58,6 +66,22 @@ def _request_json(method: str, path: str, **kwargs) -> dict | list:
 
 def _session_ws_url(session_id: str) -> str:
     return f"{gateway_ws_url().rstrip('/')}/sessions/{session_id}/stream"
+
+
+def _emit_cli_result(data: dict | list, *, json_out: bool) -> None:
+    if json_out:
+        emit_json(data)
+    else:
+        typer.echo(json.dumps(data, indent=2, default=str))
+
+
+def _parse_payload(raw: str | None) -> dict:
+    if not raw:
+        return {}
+    data = json.loads(raw)
+    if not isinstance(data, dict):
+        emit_error("--payload must be a JSON object", code=2)
+    return data
 
 
 @daemon_app.command("start")
@@ -331,6 +355,149 @@ def list_cmd(
         emit_json(result)
     else:
         typer.echo(json.dumps(result, indent=2))
+
+
+@automation_app.command("create")
+def automation_create(
+    name: str = typer.Option(..., "--name"),
+    task: str = typer.Option(..., "--task"),
+    cwd: str = typer.Option(".", "--cwd"),
+    cron: Optional[str] = typer.Option(None, "--cron"),
+    webhook: bool = typer.Option(False, "--webhook"),
+    provider: str = typer.Option("cursor-composer", "--provider"),
+    model: str = typer.Option("composer-2.5", "--model"),
+    runtime: str = typer.Option("local", "--runtime"),
+    repo_url: Optional[str] = typer.Option(None, "--repo"),
+    recent_run_count: int = typer.Option(5, "--recent-run-count"),
+    json_out: bool = typer.Option(False, "--json"),
+) -> None:
+    """Create a local automation definition."""
+    resolved_cwd = str(Path(cwd).resolve())
+    payload = CreateAutomationRequest(
+        name=name,
+        task=task,
+        cwd=resolved_cwd,
+        cron_expression=cron,
+        webhook_enabled=webhook,
+        provider=provider,
+        model=model,
+        runtime=runtime,
+        repo_url=repo_url,
+        recent_run_count=recent_run_count,
+    ).model_dump()
+    result = _request_json("POST", "/automations", json=payload)
+    _emit_cli_result(result, json_out=json_out)
+
+
+@automation_app.command("list")
+def automation_list(
+    status: Optional[str] = typer.Option(None, "--status"),
+    json_out: bool = typer.Option(False, "--json"),
+) -> None:
+    """List local automations."""
+    params = {"status": status} if status else None
+    result = _request_json("GET", "/automations", params=params)
+    _emit_cli_result(result, json_out=json_out)
+
+
+@automation_app.command("show")
+def automation_show(
+    automation_id: str = typer.Argument(...),
+    json_out: bool = typer.Option(False, "--json"),
+) -> None:
+    """Show one automation definition."""
+    result = _request_json("GET", f"/automations/{automation_id}")
+    _emit_cli_result(result, json_out=json_out)
+
+
+@automation_app.command("pause")
+def automation_pause(
+    automation_id: str = typer.Argument(...),
+    json_out: bool = typer.Option(False, "--json"),
+) -> None:
+    """Pause cron, webhook, and manual triggers for an automation."""
+    result = _request_json(
+        "PATCH",
+        f"/automations/{automation_id}",
+        json=UpdateAutomationRequest(status="paused").model_dump(exclude_unset=True),
+    )
+    _emit_cli_result(result, json_out=json_out)
+
+
+@automation_app.command("resume")
+def automation_resume(
+    automation_id: str = typer.Argument(...),
+    json_out: bool = typer.Option(False, "--json"),
+) -> None:
+    """Resume a paused automation."""
+    result = _request_json(
+        "PATCH",
+        f"/automations/{automation_id}",
+        json=UpdateAutomationRequest(status="enabled").model_dump(exclude_unset=True),
+    )
+    _emit_cli_result(result, json_out=json_out)
+
+
+@automation_app.command("delete")
+def automation_delete(
+    automation_id: str = typer.Argument(...),
+    json_out: bool = typer.Option(False, "--json"),
+) -> None:
+    """Delete an automation and its local run history."""
+    result = _request_json("DELETE", f"/automations/{automation_id}")
+    _emit_cli_result(result, json_out=json_out)
+
+
+@automation_app.command("trigger")
+def automation_trigger(
+    automation_id: str = typer.Argument(...),
+    payload: Optional[str] = typer.Option(None, "--payload"),
+    json_out: bool = typer.Option(False, "--json"),
+) -> None:
+    """Run an automation immediately with an optional JSON payload."""
+    result = _request_json(
+        "POST",
+        f"/automations/{automation_id}/trigger",
+        json={"payload": _parse_payload(payload)},
+    )
+    _emit_cli_result(result, json_out=json_out)
+
+
+@automation_app.command("runs")
+def automation_runs(
+    automation_id: str = typer.Argument(...),
+    limit: int = typer.Option(50, "--limit"),
+    json_out: bool = typer.Option(False, "--json"),
+) -> None:
+    """List recorded automation runs."""
+    result = _request_json("GET", f"/automations/{automation_id}/runs", params={"limit": limit})
+    _emit_cli_result(result, json_out=json_out)
+
+
+@automation_app.command("history")
+def automation_history(
+    automation_id: str = typer.Argument(...),
+    full: bool = typer.Option(False, "--full"),
+    limit: int = typer.Option(50, "--limit"),
+    json_out: bool = typer.Option(False, "--json"),
+) -> None:
+    """Show rolling memory, optionally with full run records."""
+    result = _request_json(
+        "GET",
+        f"/automations/{automation_id}/history",
+        params={"full": full, "limit": limit},
+    )
+    _emit_cli_result(result, json_out=json_out)
+
+
+@automation_app.command("rotate-secret")
+def automation_rotate_secret(
+    automation_id: str = typer.Argument(...),
+    json_out: bool = typer.Option(False, "--json"),
+) -> None:
+    """Generate a new bearer secret for an automation webhook."""
+    result = _request_json("POST", f"/automations/{automation_id}/rotate-secret")
+    _emit_cli_result(result, json_out=json_out)
 
 
 @wave_app.command("create")
