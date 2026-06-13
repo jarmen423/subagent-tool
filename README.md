@@ -52,6 +52,24 @@ CURSOR_API_KEY=cursor_...
 
 **Agents:** always pass `--cwd` to the target repository. Never log or commit `.env`.
 
+## Providers
+
+| Provider | ID | Default model | Credential |
+| -------- | -- | ------------- | ---------- |
+| Cursor Composer | `cursor-composer` | `composer-2.5` | `CURSOR_API_KEY` |
+| Z.AI Coding Plan | `zai-coding-plan` | `glm-5.1` | `ZAI_API_KEY` |
+
+Pass `--provider <id>` and optionally `--model <model>` to `spawn`, `resume`, `automation create`, and wave tasks. When `--model` is omitted, the provider's default model is used.
+
+```bash
+# Z.AI Coding Plan example
+cursor-subagent spawn \
+  --provider zai-coding-plan \
+  --model glm-5.1 \
+  --task "Refactor the auth module" \
+  --cwd . --json
+```
+
 ## Start stack
 
 ```bash

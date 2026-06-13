@@ -33,6 +33,9 @@ from cursor_subagent.models import (
     WaveTask,
 )
 from cursor_subagent.output import emit_error, emit_json
+from cursor_subagent.providers import list_providers
+
+_PROVIDER_HELP = f"Agent provider. Choices: {', '.join(list_providers())}."
 
 app = typer.Typer(add_completion=False, no_args_is_help=True)
 daemon_app = typer.Typer(help="Manage the cursor-subagent daemon")
@@ -138,8 +141,8 @@ def bus_status_cmd(json_out: bool = typer.Option(False, "--json")) -> None:
 def spawn(
     task: str = typer.Option(..., "--task"),
     cwd: str = typer.Option(".", "--cwd"),
-    provider: str = typer.Option("cursor-composer", "--provider"),
-    model: str = typer.Option("composer-2.5", "--model"),
+    provider: str = typer.Option("cursor-composer", "--provider", help=_PROVIDER_HELP),
+    model: Optional[str] = typer.Option(None, "--model", help="Defaults to the provider's default model."),
     runtime: str = typer.Option("local", "--runtime"),
     repo_url: Optional[str] = typer.Option(None, "--repo"),
     persist: bool = typer.Option(False, "--persist"),
@@ -170,8 +173,8 @@ def spawn(
 def resume_cmd(
     agent_id: str = typer.Option(..., "--agent-id"),
     cwd: str = typer.Option(".", "--cwd"),
-    provider: str = typer.Option("cursor-composer", "--provider"),
-    model: str = typer.Option("composer-2.5", "--model"),
+    provider: str = typer.Option("cursor-composer", "--provider", help=_PROVIDER_HELP),
+    model: Optional[str] = typer.Option(None, "--model", help="Defaults to the provider's default model."),
     runtime: str = typer.Option("local", "--runtime"),
     repo_url: Optional[str] = typer.Option(None, "--repo"),
     persist: bool = typer.Option(False, "--persist"),
@@ -364,8 +367,8 @@ def automation_create(
     cwd: str = typer.Option(".", "--cwd"),
     cron: Optional[str] = typer.Option(None, "--cron"),
     webhook: bool = typer.Option(False, "--webhook"),
-    provider: str = typer.Option("cursor-composer", "--provider"),
-    model: str = typer.Option("composer-2.5", "--model"),
+    provider: str = typer.Option("cursor-composer", "--provider", help=_PROVIDER_HELP),
+    model: Optional[str] = typer.Option(None, "--model", help="Defaults to the provider's default model."),
     runtime: str = typer.Option("local", "--runtime"),
     repo_url: Optional[str] = typer.Option(None, "--repo"),
     recent_run_count: int = typer.Option(5, "--recent-run-count"),

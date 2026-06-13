@@ -148,9 +148,33 @@ Prompt guidance:
 - One session per delegated task; reuse via `send`
 - Start `bus` before `watch`; REST auto-starts Python daemon
 - Always `close` sessions or `wave close` when finished
-- Never log `CURSOR_API_KEY`
-- v1 provider: `cursor-composer` only
+- Never log `CURSOR_API_KEY` or `ZAI_API_KEY`
+- Supported providers:
+  - `cursor-composer` (default) — Cursor Composer 2.5 via cursor-sdk
+  - `zai-coding-plan` — Z.AI GLM Coding Plan API (`glm-5.1`, `glm-5`, etc.)
+- CLI coding agents (Claude Code, Codex, Kimi, Hermes, OpenClaw) are not yet integrated
 - On Windows, local runtime bridge bootstrap is automatic
 - Automation runs are already persisted; inspect them with `automation history`
+
+## Z.AI Coding Plan
+
+Use `zai-coding-plan` to delegate to the Z.AI GLM Coding Plan API:
+
+```bash
+# Add ZAI_API_KEY to the repo .env
+ZAI_API_KEY=...
+
+# Spawn a Z.AI session
+cursor-subagent spawn \
+  --provider zai-coding-plan \
+  --model glm-5.1 \
+  --task "Refactor the auth module" \
+  --cwd /path/to/repo --json
+
+# Multi-turn follow-ups reuse the same local message history
+cursor-subagent send <sessionId> "Also add tests" --json
+```
+
+Credentials resolve from `ZAI_API_KEY` in the same `.env` priority as `CURSOR_API_KEY`.
 
 See [`references/agent-md-snippet.md`](references/agent-md-snippet.md) for AGENTS.md copy-paste block.

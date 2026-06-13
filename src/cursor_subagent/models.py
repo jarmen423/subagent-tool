@@ -4,7 +4,9 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+from cursor_subagent.providers import default_model
 
 
 def utc_now_iso() -> str:
@@ -57,7 +59,13 @@ class WaveTask(BaseModel):
     handoff_path: str | None = Field(default=None, alias="handoffPath")
     provider: str = "cursor-composer"
     cwd: str | None = None
-    model: str = "composer-2.5"
+    model: str | None = None
+
+    @model_validator(mode="after")
+    def _set_default_model(self) -> "WaveTask":
+        if self.model is None:
+            self.model = default_model(self.provider)
+        return self
 
 
 class WaveDefinition(BaseModel):
@@ -158,7 +166,7 @@ class SpawnSessionRequest(BaseModel):
     task: str
     cwd: str = "."
     provider: str = "cursor-composer"
-    model: str = "composer-2.5"
+    model: str | None = None
     runtime: str = "local"
     repo_url: str | None = None
     persist: bool = False
@@ -166,16 +174,28 @@ class SpawnSessionRequest(BaseModel):
     task_id: str | None = None
     from_template: str | None = None
 
+    @model_validator(mode="after")
+    def _set_default_model(self) -> "SpawnSessionRequest":
+        if self.model is None:
+            self.model = default_model(self.provider)
+        return self
+
 
 class ResumeSessionRequest(BaseModel):
     agent_id: str
     cwd: str = "."
     provider: str = "cursor-composer"
-    model: str = "composer-2.5"
+    model: str | None = None
     runtime: str = "local"
     repo_url: str | None = None
     persist: bool = False
     task: str | None = None
+
+    @model_validator(mode="after")
+    def _set_default_model(self) -> "ResumeSessionRequest":
+        if self.model is None:
+            self.model = default_model(self.provider)
+        return self
 
 
 class SendMessageRequest(BaseModel):
@@ -198,12 +218,18 @@ class CreateAutomationRequest(BaseModel):
     task: str
     cwd: str = "."
     provider: str = "cursor-composer"
-    model: str = "composer-2.5"
+    model: str | None = None
     runtime: str = "local"
     repo_url: str | None = None
     cron_expression: str | None = None
     webhook_enabled: bool = False
     recent_run_count: int = 5
+
+    @model_validator(mode="after")
+    def _set_default_model(self) -> "CreateAutomationRequest":
+        if self.model is None:
+            self.model = default_model(self.provider)
+        return self
 
 
 class UpdateAutomationRequest(BaseModel):
