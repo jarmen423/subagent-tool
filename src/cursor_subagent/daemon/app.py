@@ -13,26 +13,50 @@ import sys
 
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from cursor_subagent.bus.nats_publisher import create_publisher
+from cursor_subagent.daemon.automation_manager import AutomationManager
 from cursor_subagent.daemon.session_manager import SessionManager
 from cursor_subagent.daemon.startup import DEFAULT_HOST, DEFAULT_PORT, pidfile_path
 from cursor_subagent.models import (
+    AutomationStatus,
+    AutomationTriggerRequest,
+    AutomationTriggerType,
+    CreateAutomationRequest,
     CreateWaveRequest,
     ResumeSessionRequest,
     SendMessageRequest,
     SessionStatus,
     SpawnSessionRequest,
+    UpdateAutomationRequest,
     WaveRecord,
     WaveSpawnRequest,
     WaveStatus,
 )
+from cursor_subagent.store.automations import AutomationStore
 from cursor_subagent.store.db import connect
 from cursor_subagent.store.events import EventStore
 from cursor_subagent.store.sessions import SessionStore
 from cursor_subagent.store.waves import WaveStore
+
+
+def _base_url(request: Request) -> str:
+    """Return the daemon URL clients can use for generated webhook URLs."""
+    configured = os.environ.get("SUBAGENT_DAEMON_URL")
+    if configured:
+        return configured
+    return str(request.base_url).rstrip("/")
+
+
+def _bearer_token(value: str | None) -> str | None:
+    if not value:
+        return None
+    scheme, _, token = value.partition(" ")
+    if scheme.lower() != "bearer" or not token:
+        return None
+    return token
 
 
 def create_app() -> FastAPI:
@@ -40,16 +64,32 @@ def create_app() -> FastAPI:
     session_store = SessionStore(conn)
     event_store = EventStore(conn)
     wave_store = WaveStore(conn)
+    automation_store = AutomationStore(conn)
     manager = SessionManager(session_store=session_store, event_store=event_store)
+    automation_manager = AutomationManager(
+        store=automation_store,
+        session_manager=manager,
+    )
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         pidfile_path().write_text(str(os.getpid()))
+        scheduler_stop = asyncio.Event()
+        scheduler_task: asyncio.Task | None = None
         manager.publisher = await create_publisher()
         await manager.recover_open_sessions()
+        if os.environ.get("SUBAGENT_DISABLE_AUTOMATION_SCHEDULER") != "1":
+            scheduler_task = asyncio.create_task(automation_manager.run_scheduler(scheduler_stop))
         try:
             yield
         finally:
+            scheduler_stop.set()
+            if scheduler_task:
+                scheduler_task.cancel()
+                try:
+                    await scheduler_task
+                except asyncio.CancelledError:
+                    pass
             await manager.publisher.close()
             pidfile_path().unlink(missing_ok=True)
 
@@ -133,6 +173,110 @@ def create_app() -> FastAPI:
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="Session not found") from exc
 
+    @app.post("/automations")
+    async def create_automation(req: CreateAutomationRequest, request: Request) -> JSONResponse:
+        try:
+            return JSONResponse(automation_manager.create(req, base_url=_base_url(request)))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/automations")
+    async def list_automations(request: Request, status: str | None = None) -> list[dict]:
+        try:
+            parsed_status = AutomationStatus(status) if status else None
+            return automation_manager.list(status=parsed_status, base_url=_base_url(request))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/automations/{automation_id}")
+    async def get_automation(automation_id: str, request: Request) -> dict:
+        try:
+            return automation_manager.get(automation_id, base_url=_base_url(request))
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Automation not found") from exc
+
+    @app.patch("/automations/{automation_id}")
+    async def update_automation(
+        automation_id: str,
+        req: UpdateAutomationRequest,
+        request: Request,
+    ) -> dict:
+        try:
+            return automation_manager.update(automation_id, req, base_url=_base_url(request))
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Automation not found") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.delete("/automations/{automation_id}")
+    async def delete_automation(automation_id: str) -> dict:
+        try:
+            return automation_manager.delete(automation_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Automation not found") from exc
+
+    @app.post("/automations/{automation_id}/trigger")
+    async def trigger_automation(
+        automation_id: str,
+        req: AutomationTriggerRequest | None = None,
+    ) -> JSONResponse:
+        try:
+            result = await automation_manager.trigger(
+                automation_id,
+                trigger_type=AutomationTriggerType.MANUAL,
+                payload=(req.payload if req else {}),
+            )
+            return JSONResponse(result)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Automation not found") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/automations/{automation_id}/webhook")
+    async def trigger_automation_webhook(
+        automation_id: str,
+        req: AutomationTriggerRequest,
+        authorization: str | None = Header(default=None),
+    ) -> JSONResponse:
+        try:
+            result = await automation_manager.trigger_webhook(
+                automation_id,
+                bearer_token=_bearer_token(authorization),
+                req=req,
+            )
+            return JSONResponse(result)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Automation not found") from exc
+        except PermissionError as exc:
+            raise HTTPException(status_code=401, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/automations/{automation_id}/runs")
+    async def list_automation_runs(automation_id: str, limit: int = 50) -> list[dict]:
+        try:
+            return automation_manager.list_runs(automation_id, limit=limit)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Automation not found") from exc
+
+    @app.get("/automations/{automation_id}/history")
+    async def get_automation_history(
+        automation_id: str,
+        full: bool = False,
+        limit: int = 50,
+    ) -> dict:
+        try:
+            return automation_manager.history(automation_id, full=full, limit=limit)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Automation not found") from exc
+
+    @app.post("/automations/{automation_id}/rotate-secret")
+    async def rotate_automation_secret(automation_id: str, request: Request) -> dict:
+        try:
+            return automation_manager.rotate_secret(automation_id, base_url=_base_url(request))
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Automation not found") from exc
+
     @app.post("/waves")
     async def create_wave(req: CreateWaveRequest) -> dict:
         wave = WaveRecord(id=req.wave_id, goal=req.goal, tasks=req.tasks, status=WaveStatus.OPEN)
@@ -183,6 +327,8 @@ def create_app() -> FastAPI:
     app.state.manager = manager
     app.state.event_store = event_store
     app.state.wave_store = wave_store
+    app.state.automation_manager = automation_manager
+    app.state.automation_store = automation_store
     return app
 
 

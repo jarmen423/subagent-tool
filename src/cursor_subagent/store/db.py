@@ -48,6 +48,41 @@ CREATE TABLE IF NOT EXISTS waves (
   status TEXT,
   created_at TEXT
 );
+
+CREATE TABLE IF NOT EXISTS automations (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  task TEXT NOT NULL,
+  cwd TEXT NOT NULL,
+  provider TEXT NOT NULL DEFAULT 'cursor-composer',
+  model TEXT NOT NULL,
+  runtime TEXT NOT NULL,
+  repo_url TEXT,
+  cron_expression TEXT,
+  webhook_enabled INTEGER DEFAULT 0,
+  webhook_secret_hash TEXT,
+  status TEXT NOT NULL,
+  memory_summary TEXT,
+  recent_run_count INTEGER DEFAULT 5,
+  next_run_at TEXT,
+  created_at TEXT,
+  updated_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS automation_runs (
+  id TEXT PRIMARY KEY,
+  automation_id TEXT REFERENCES automations(id),
+  trigger_type TEXT NOT NULL,
+  trigger_payload_json TEXT,
+  rendered_prompt TEXT NOT NULL,
+  session_id TEXT,
+  status TEXT NOT NULL,
+  result TEXT,
+  error TEXT,
+  memory_update TEXT,
+  started_at TEXT,
+  finished_at TEXT
+);
 """
 
 

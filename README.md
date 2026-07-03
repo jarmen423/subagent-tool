@@ -52,6 +52,24 @@ CURSOR_API_KEY=cursor_...
 
 **Agents:** always pass `--cwd` to the target repository. Never log or commit `.env`.
 
+## Providers
+
+| Provider | ID | Default model | Credential |
+| -------- | -- | ------------- | ---------- |
+| Cursor Composer | `cursor-composer` | `composer-2.5` | `CURSOR_API_KEY` |
+| Z.AI Coding Plan | `zai-coding-plan` | `glm-5.1` | `ZAI_API_KEY` |
+
+Pass `--provider <id>` and optionally `--model <model>` to `spawn`, `resume`, `automation create`, and wave tasks. When `--model` is omitted, the provider's default model is used.
+
+```bash
+# Z.AI Coding Plan example
+cursor-subagent spawn \
+  --provider zai-coding-plan \
+  --model glm-5.1 \
+  --task "Refactor the auth module" \
+  --cwd . --json
+```
+
 ## Start stack
 
 ```bash
@@ -97,6 +115,52 @@ cursor-subagent spawn --from-template <oldSessionId> --task "Run again" --json
 cursor-subagent wave create --wave-id wave-1 --goal "..." --tasks tasks.json
 cursor-subagent wave spawn wave-1 --cwd . --json
 cursor-subagent wave close wave-1 --json
+```
+
+## Local automations
+
+Project-local automations live in the same SQLite database as sessions and
+waves. They are not Cursor's hosted Automations product. The daemon owns their
+cron/webhook triggers and creates a fresh persisted Cursor session for every
+run.
+
+Each automation keeps its own history:
+
+- Every run is recorded in `automation_runs` with trigger metadata, rendered
+  prompt, session id, result, status, timestamps, and error text.
+- The prompt for each fresh session includes a rolling automation memory
+  summary plus recent run summaries.
+- The agent is instructed to end with an `Automation Memory Update` section;
+  that section updates the rolling summary. If it is missing, the daemon stores
+  a deterministic fallback summary so history still advances.
+
+```bash
+# Cron automation: runs in daemon local time, no downtime backfill
+cursor-subagent automation create \
+  --name "Daily repo digest" \
+  --task "Summarize important changes in this repository" \
+  --cwd "$(pwd)" \
+  --cron "0 9 * * *" \
+  --json
+
+# Webhook automation: generated secret is shown once
+cursor-subagent automation create \
+  --name "External deploy check" \
+  --task "Inspect this deploy payload and report follow-up work" \
+  --cwd "$(pwd)" \
+  --webhook \
+  --json
+
+curl -X POST "$WEBHOOK_URL" \
+  -H "Authorization: Bearer $WEBHOOK_SECRET" \
+  -H "Content-Type: application/json" \
+  -d '{"payload":{"deploy":"staging"}}'
+
+cursor-subagent automation trigger <automationId> --payload '{"reason":"manual"}' --json
+cursor-subagent automation history <automationId> --full --json
+cursor-subagent automation pause <automationId> --json
+cursor-subagent automation resume <automationId> --json
+cursor-subagent automation rotate-secret <automationId> --json
 ```
 
 ## Smoke test
@@ -148,6 +212,7 @@ Optional: if you already run a bridge, set `CURSOR_SDK_BRIDGE_URL` and `CURSOR_S
 | `SUBAGENT_NATS_SERVER_BIN` | `~/.cursor/subagents/bin/nats-server(.exe)` |
 | `CURSOR_SDK_BRIDGE_URL` | auto on Windows; optional manual bridge |
 | `CURSOR_SDK_BRIDGE_TOKEN` | paired with bridge URL |
+| `SUBAGENT_DISABLE_AUTOMATION_SCHEDULER` | unset; set `1` for tests/manual daemon debugging |
 
 ## Tests
 

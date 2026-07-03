@@ -4,7 +4,9 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+from cursor_subagent.providers import default_model
 
 
 def utc_now_iso() -> str:
@@ -31,6 +33,23 @@ class WaveStatus(str, Enum):
     CLOSED = "closed"
 
 
+class AutomationStatus(str, Enum):
+    ENABLED = "enabled"
+    PAUSED = "paused"
+
+
+class AutomationTriggerType(str, Enum):
+    MANUAL = "manual"
+    CRON = "cron"
+    WEBHOOK = "webhook"
+
+
+class AutomationRunStatus(str, Enum):
+    RUNNING = "running"
+    FINISHED = "finished"
+    ERROR = "error"
+
+
 class WaveTask(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
@@ -40,7 +59,13 @@ class WaveTask(BaseModel):
     handoff_path: str | None = Field(default=None, alias="handoffPath")
     provider: str = "cursor-composer"
     cwd: str | None = None
-    model: str = "composer-2.5"
+    model: str | None = None
+
+    @model_validator(mode="after")
+    def _set_default_model(self) -> "WaveTask":
+        if self.model is None:
+            self.model = default_model(self.provider)
+        return self
 
 
 class WaveDefinition(BaseModel):
@@ -93,11 +118,55 @@ class WaveRecord(BaseModel):
     created_at: str = Field(default_factory=utc_now_iso)
 
 
+class AutomationRecord(BaseModel):
+    """Durable definition for a project-local automation.
+
+    Automations are intentionally separate from sessions: every trigger creates
+    a fresh persisted session, while this record owns the cross-run memory and
+    trigger configuration that make those fresh sessions history-aware.
+    """
+
+    id: str
+    name: str
+    task: str
+    cwd: str
+    provider: str = "cursor-composer"
+    model: str = "composer-2.5"
+    runtime: str = "local"
+    repo_url: str | None = None
+    cron_expression: str | None = None
+    webhook_enabled: bool = False
+    webhook_secret_hash: str | None = None
+    status: AutomationStatus = AutomationStatus.ENABLED
+    memory_summary: str | None = None
+    recent_run_count: int = 5
+    next_run_at: str | None = None
+    created_at: str = Field(default_factory=utc_now_iso)
+    updated_at: str = Field(default_factory=utc_now_iso)
+
+
+class AutomationRunRecord(BaseModel):
+    """Immutable-ish execution ledger row for one automation trigger."""
+
+    id: str
+    automation_id: str
+    trigger_type: AutomationTriggerType
+    trigger_payload: dict[str, Any] = Field(default_factory=dict)
+    rendered_prompt: str
+    session_id: str | None = None
+    status: AutomationRunStatus = AutomationRunStatus.RUNNING
+    result: str | None = None
+    error: str | None = None
+    memory_update: str | None = None
+    started_at: str = Field(default_factory=utc_now_iso)
+    finished_at: str | None = None
+
+
 class SpawnSessionRequest(BaseModel):
     task: str
     cwd: str = "."
     provider: str = "cursor-composer"
-    model: str = "composer-2.5"
+    model: str | None = None
     runtime: str = "local"
     repo_url: str | None = None
     persist: bool = False
@@ -105,16 +174,28 @@ class SpawnSessionRequest(BaseModel):
     task_id: str | None = None
     from_template: str | None = None
 
+    @model_validator(mode="after")
+    def _set_default_model(self) -> "SpawnSessionRequest":
+        if self.model is None:
+            self.model = default_model(self.provider)
+        return self
+
 
 class ResumeSessionRequest(BaseModel):
     agent_id: str
     cwd: str = "."
     provider: str = "cursor-composer"
-    model: str = "composer-2.5"
+    model: str | None = None
     runtime: str = "local"
     repo_url: str | None = None
     persist: bool = False
     task: str | None = None
+
+    @model_validator(mode="after")
+    def _set_default_model(self) -> "ResumeSessionRequest":
+        if self.model is None:
+            self.model = default_model(self.provider)
+        return self
 
 
 class SendMessageRequest(BaseModel):
@@ -130,6 +211,44 @@ class CreateWaveRequest(BaseModel):
 class WaveSpawnRequest(BaseModel):
     task_ids: list[str] | None = None
     cwd: str = "."
+
+
+class CreateAutomationRequest(BaseModel):
+    name: str
+    task: str
+    cwd: str = "."
+    provider: str = "cursor-composer"
+    model: str | None = None
+    runtime: str = "local"
+    repo_url: str | None = None
+    cron_expression: str | None = None
+    webhook_enabled: bool = False
+    recent_run_count: int = 5
+
+    @model_validator(mode="after")
+    def _set_default_model(self) -> "CreateAutomationRequest":
+        if self.model is None:
+            self.model = default_model(self.provider)
+        return self
+
+
+class UpdateAutomationRequest(BaseModel):
+    name: str | None = None
+    task: str | None = None
+    cwd: str | None = None
+    provider: str | None = None
+    model: str | None = None
+    runtime: str | None = None
+    repo_url: str | None = None
+    cron_expression: str | None = None
+    webhook_enabled: bool | None = None
+    status: AutomationStatus | None = None
+    memory_summary: str | None = None
+    recent_run_count: int | None = None
+
+
+class AutomationTriggerRequest(BaseModel):
+    payload: dict[str, Any] = Field(default_factory=dict)
 
 
 class SessionResponse(BaseModel):
